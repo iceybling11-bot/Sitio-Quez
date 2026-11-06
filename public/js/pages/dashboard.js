@@ -12,7 +12,7 @@ export default async function (el) {
   el.innerHTML = `<h4 class="mb-3">Dashboard</h4>
   <div class="row g-3 mb-4">
     ${stat("Today's Sales", peso(s.today_sales), 'cash-coin')}${stat('This Month', peso(s.monthly), 'calendar3')}
-    ${stat("Today's Reservations", s.today_reservations, 'calendar-check')}${stat('Occupied Tables', s.occupied_tables, 'grid-3x3-gap')}
+    ${stat("Today's Reservations", s.today_reservations, 'calendar-check')}
     ${stat('Upcoming', s.upcoming, 'clock-history')}${stat('Low Stock Items', s.low_stock, 'exclamation-triangle')}
   </div>
   <p class="text-muted">Best seller this month: <strong>${esc(s.best_seller)}</strong></p>

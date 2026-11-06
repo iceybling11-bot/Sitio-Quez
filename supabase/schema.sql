@@ -352,10 +352,10 @@ begin
 
   for pay in select * from jsonb_array_elements(coalesce(p->'payments','[]'::jsonb)) loop
     m := lower(trim(coalesce(pay->>'method','')));
-    if m not in ('cash','gcash','credit card') then raise exception '% is not a recognized payment method.', pay->>'method'; end if;
+    if m not in ('cash','gcash','bank transfer','credit card') then raise exception '% is not a recognized payment method.', pay->>'method'; end if;
     if coalesce((pay->>'amount')::numeric,0) < 0 then raise exception 'Payment amounts cannot be negative.'; end if;
-    if m = 'gcash' then
-      if coalesce(trim(pay->>'reference_number'),'') = '' then raise exception 'A reference number is required for GCash payments.'; end if;
+    if m in ('gcash','bank transfer') then
+      if coalesce(trim(pay->>'reference_number'),'') = '' then raise exception 'A reference number is required for % payments.', pay->>'method'; end if;
       v_needs_ref := true;
     end if;
     v_paid := v_paid + coalesce((pay->>'amount')::numeric,0);
@@ -363,7 +363,7 @@ begin
   if not v_tab and v_paid <= 0 then raise exception 'Please enter at least one payment before completing the sale.'; end if;
   if not v_tab and v_paid + 0.01 < v_total then raise exception 'Payment (%) is less than the total bill (%).', v_paid, v_total; end if;
   if v_needs_ref and not coalesce((p->>'has_proof')::boolean,false) then
-    raise exception 'Please attach proof of payment (screenshot/receipt) for GCash payments.';
+    raise exception 'Please attach proof of payment (screenshot/receipt) for GCash / bank transfer payments.';
   end if;
 
   v_req := not is_admin() and (v_disc > 1000 or
@@ -766,34 +766,6 @@ end $$;
 revoke execute on all functions in schema public from public, anon;
 grant execute on all functions in schema public to authenticated;
 
--- ---------- Seed data ----------
-insert into settings(key, value) values
-  ('restaurant_name','Sitio Verde Buffet Restaurant'),
-  ('receipt_footer','Thank you for dining with us!'),
-  ('max_staff_discount_percent','10')
-on conflict (key) do nothing;
-insert into categories(name) values ('Buffet') on conflict (name) do nothing;
-insert into suppliers(name, contact)
-  select 'Green Valley Meat & Produce','0917-000-0000' where not exists (select 1 from suppliers);
-insert into inventory_items(name, quantity, unit, low_stock_threshold, supplier_id)
-  select 'Rice', 100, 'kg', 15, (select id from suppliers limit 1) where not exists (select 1 from inventory_items);
-insert into products(name, category_id, is_buffet)
-  select 'Unlimited Buffet', (select id from categories where name='Buffet'), true
-   where not exists (select 1 from products where is_buffet);
-insert into buffet_tiers(product_id, tier, price)
-  select p.id, v.tier, v.price
-    from (select id from products where is_buffet order by id limit 1) p,
-         (values ('adult',599.00),('senior',479.20),('pwd',479.20),('kids',449.00),('free',0.00)) v(tier, price)
-on conflict (product_id, tier) do nothing;
-insert into recipes(product_id, inventory_item_id, quantity_per_unit)
-  select p.id, i.id, 0.3
-    from (select id from products where is_buffet order by id limit 1) p,
-         (select id from inventory_items where name='Rice' limit 1) i
-   where not exists (select 1 from recipes);
-insert into restaurant_tables(name, capacity)
-  select 'T' || g, case when g % 2 = 1 then 4 else 6 end from generate_series(1,8) g
-   where not exists (select 1 from restaurant_tables);
-
 -- ---------- Dashboard & reports (server-side so totals aren't capped by the 1000-row API limit) ----------
 create or replace function dashboard_stats() returns jsonb
 language plpgsql stable security definer set search_path = public as $$
@@ -853,3 +825,64 @@ begin
 end $$;
 
 grant execute on function dashboard_stats(), report_summary(date, date) to authenticated;
+
+-- ---------- Seed data (idempotent; also used by the factory reset) ----------
+create or replace function seed_defaults() returns void
+language plpgsql security definer set search_path = public as $fn$
+begin
+insert into settings(key, value) values
+  ('restaurant_name','Sitio Verde Buffet Restaurant'),
+  ('receipt_footer','Thank you for dining with us!'),
+  ('max_staff_discount_percent','10')
+on conflict (key) do nothing;
+insert into categories(name) values ('Buffet') on conflict (name) do nothing;
+insert into suppliers(name, contact)
+  select 'Green Valley Meat & Produce','0917-000-0000' where not exists (select 1 from suppliers);
+insert into inventory_items(name, quantity, unit, low_stock_threshold, supplier_id)
+  select 'Rice', 100, 'kg', 15, (select id from suppliers limit 1) where not exists (select 1 from inventory_items);
+insert into products(name, category_id, is_buffet)
+  select 'Unlimited Buffet', (select id from categories where name='Buffet'), true
+   where not exists (select 1 from products where is_buffet);
+insert into buffet_tiers(product_id, tier, price)
+  select p.id, v.tier, v.price
+    from (select id from products where is_buffet order by id limit 1) p,
+         (values ('adult',599.00),('senior',479.20),('pwd',479.20),('kids',449.00),('free',0.00)) v(tier, price)
+on conflict (product_id, tier) do nothing;
+insert into recipes(product_id, inventory_item_id, quantity_per_unit)
+  select p.id, i.id, 0.3
+    from (select id from products where is_buffet order by id limit 1) p,
+         (select id from inventory_items where name='Rice' limit 1) i
+   where not exists (select 1 from recipes);
+
+end $fn$;
+select seed_defaults();
+
+-- ---------- Data reset (admin only) ----------
+-- scope 'sales'   : wipes sales, reservations, expenses, logs, notifications and stock history.
+--                   Keeps staff, settings, menu/prices, customers and current stock levels.
+-- scope 'factory' : also wipes customers, menu, inventory and suppliers and restores the sample defaults.
+-- Staff accounts and settings are never touched.
+create or replace function reset_data(p_scope text, p_confirm text) returns void
+language plpgsql security definer set search_path = public as $fn$
+begin
+  if not is_admin() then raise exception 'Admins only'; end if;
+  if p_confirm is distinct from 'RESET' then raise exception 'Type RESET to confirm.'; end if;
+  if p_scope not in ('sales','factory') then raise exception 'Unknown reset type.'; end if;
+
+  update restaurant_tables set session_id = null, merged_into_id = null, status = 'available';
+  delete from sale_refunds; delete from sale_payments; delete from sale_attachments; delete from sale_items; delete from sales;
+  delete from dining_sessions;
+  delete from reservation_payments; delete from reservation_attachments; delete from reservations;
+  delete from cashier_shifts; delete from notifications; delete from inventory_transactions; delete from expenses;
+  delete from activity_logs;
+
+  if p_scope = 'factory' then
+    delete from recipes; delete from buffet_tiers; delete from products; delete from categories;
+    delete from inventory_items; delete from suppliers; delete from customers; delete from restaurant_tables;
+    perform seed_defaults();
+  end if;
+  perform log_activity('DATA RESET (' || p_scope || ')');
+end $fn$;
+
+revoke execute on all functions in schema public from public, anon;
+grant execute on all functions in schema public to authenticated;

@@ -1,6 +1,6 @@
 import { sb, state, esc, peso, dt, num, run, rpc, on, modal, confirmBox, badge, pager, isAdmin, toast, signedUrl, PAGE_SIZE, hashParams } from '../core.js';
 
-const SALE_SELECT = '*, sale_items(*), sale_payments(*), sale_refunds(*), sale_attachments(*), cashier:profiles!cashier_id(name,username), table:restaurant_tables!table_id(name), reservation:reservations!reservation_id(reservation_number)';
+const SALE_SELECT = '*, sale_items(*), sale_payments(*), sale_refunds(*), sale_attachments(*), cashier:profiles!cashier_id(name,username), reservation:reservations!reservation_id(reservation_number)';
 
 export async function printReceipt(saleId) {
   const s = await run(sb.from('sales').select(SALE_SELECT).eq('id', saleId).single());
@@ -14,7 +14,7 @@ export async function printReceipt(saleId) {
   area.innerHTML = `<div class="receipt"><div style="text-align:center"><strong>${esc(state.settings.restaurant_name || 'Sitio Verde')}</strong><br>SALES RECEIPT (Customer Copy)</div><hr>
     ${row('Receipt #', esc(s.sale_number))}${s.reservation ? row('Reservation #', esc(s.reservation.reservation_number)) : ''}${row('Date', dt(s.created_at))}
     ${row('Cashier', esc(s.cashier?.name || s.cashier?.username || 'N/A'))}${row('Customer', esc(s.customer_name || 'Walk-in'))}
-    ${s.table ? row('Table', esc(s.table.name)) : ''}${s.queue_number ? row('Queue #', esc(s.queue_number)) : ''}<hr>
+    ${s.queue_number ? row('Queue #', esc(s.queue_number)) : ''}<hr>
     ${items}<hr>${row('Subtotal', 'PHP ' + num(s.subtotal).toFixed(2))}
     ${num(s.discount) ? row(`Discount (${esc(s.discount_type)})`, '-PHP ' + num(s.discount).toFixed(2)) : ''}
     ${num(s.senior_pwd_savings) ? row('Senior/PWD savings', 'PHP ' + num(s.senior_pwd_savings).toFixed(2)) : ''}
@@ -60,7 +60,7 @@ export async function detail(el, { id }) {
     <tr class="fw-bold"><td>Net paid</td><td class="text-end">${peso(paid - refunded)}</td></tr></tbody></table></div></div>
   <div class="col-lg-5"><div class="card"><div class="card-body">
     <div>Customer: <strong>${esc(s.customer_name || 'Walk-in')}</strong></div><div>Cashier: ${esc(s.cashier?.name || s.cashier?.username || '—')}</div>
-    <div>Date: ${dt(s.created_at)}</div>${s.table ? `<div>Table: ${esc(s.table.name)}</div>` : ''}${s.queue_number ? `<div>Queue: ${esc(s.queue_number)}</div>` : ''}
+    <div>Date: ${dt(s.created_at)}</div>${s.queue_number ? `<div>Queue: ${esc(s.queue_number)}</div>` : ''}
     ${s.reservation ? `<div>Reservation: <a href="#/reservation/${s.reservation_id}">${esc(s.reservation.reservation_number)}</a></div>` : ''}
     <hr><div>Subtotal: ${peso(s.subtotal)}</div><div>Discount: ${peso(s.discount)} (${esc(s.discount_type)})</div>
     <div>Senior/PWD savings: ${peso(s.senior_pwd_savings)}</div><div class="fs-5 fw-bold">Total: ${peso(s.total)}</div>

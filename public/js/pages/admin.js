@@ -1,4 +1,4 @@
-import { sb, state, esc, peso, dt, num, run, rpc, on, modal, confirmBox, badge, toast } from '../core.js';
+import { sb, state, esc, peso, dt, num, run, rpc, on, modal, confirmBox, badge, toast, downloadCSV } from '../core.js';
 import { fetchAll } from './finance.js';
 
 const TIERS = [['adult', 'Adult'], ['senior', 'Senior'], ['pwd', 'PWD'], ['kids', 'Kids'], ['free', 'Free']];
@@ -79,17 +79,59 @@ export async function logs(el) {
   el.innerHTML = `<h4 class="mb-3">Activity log</h4><div class="card"><div class="table-responsive"><table class="table table-sm mb-0"><tbody>${data.map((l) => `<tr><td class="text-nowrap">${dt(l.created_at)}</td><td>${esc(l.profiles?.name || l.profiles?.username || 'system')}</td><td>${esc(l.action)}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
+const DATASETS = [
+  ['sales', 'Sales'], ['sale_items', 'Sale items'], ['sale_payments', 'Sale payments'], ['sale_refunds', 'Refunds'],
+  ['reservations', 'Reservations'], ['reservation_payments', 'Reservation payments'], ['customers', 'Customers'],
+  ['inventory_items', 'Inventory (current stock)'], ['inventory_transactions', 'Inventory history'],
+  ['expenses', 'Expenses'], ['products', 'Products'], ['buffet_tiers', 'Buffet prices'],
+];
+const rowsToCSV = (rows) => {
+  if (!rows.length) return [['(no data)']];
+  const cols = Object.keys(rows[0]);
+  return [cols, ...rows.map((r) => cols.map((c) => (r[c] !== null && typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])))];
+};
+const stamp = () => new Date().toISOString().slice(0, 10);
+
 export async function backup(el) {
-  el.innerHTML = `<h4 class="mb-3">Backup</h4><div class="card card-body" style="max-width:620px"><p>Downloads a JSON copy of your key business data (sales, reservations, customers, inventory, expenses, products).</p>
-    <p class="text-muted small">This is a convenience export. For real disaster recovery, rely on Supabase's database backups (Project → Database → Backups; daily backups are on paid plans).</p><button class="btn btn-sv align-self-start" id="dl">Download JSON backup</button></div>`;
-  on(el, 'click', '#dl', async (e, t) => {
+  el.innerHTML = `<h4 class="mb-3">Data &amp; Reset</h4>
+  <div class="card mb-4"><div class="card-body"><h5>Download your data</h5>
+    <p class="text-muted">Keep a copy before you clear anything. CSV files open in Excel / Google Sheets.</p>
+    <button class="btn btn-sv mb-3" id="all"><i class="bi bi-download"></i> Download everything (one JSON file)</button>
+    <div class="d-flex flex-wrap gap-2">${DATASETS.map(([k, l]) => `<button class="btn btn-outline-success btn-sm" data-csv="${k}">${l} (CSV)</button>`).join('')}</div></div></div>
+  <div class="card border-danger"><div class="card-body"><h5 class="text-danger">Reset data</h5>
+    <p>This cannot be undone. <strong>Download your data first.</strong> Staff accounts and settings are never deleted.</p>
+    <div class="form-check mb-2"><input class="form-check-input" type="radio" name="scope" id="s1" value="sales" checked>
+      <label class="form-check-label" for="s1"><strong>Clear sales &amp; reservations</strong> — deletes all sales, reservations, expenses, logs and stock history. Keeps your menu, prices, customers and current stock quantities.</label></div>
+    <div class="form-check mb-3"><input class="form-check-input" type="radio" name="scope" id="s2" value="factory">
+      <label class="form-check-label" for="s2"><strong>Full reset</strong> — everything above, plus customers, menu, inventory and suppliers, restored to the sample defaults.</label></div>
+    <button class="btn btn-danger" id="reset">Reset data…</button></div></div>`;
+
+  on(el, 'click', '#all', async (e, t) => {
     t.disabled = true;
     try {
-      const names = ['customers', 'products', 'buffet_tiers', 'recipes', 'inventory_items', 'suppliers', 'sales', 'sale_items', 'sale_payments', 'sale_refunds', 'reservations', 'reservation_payments', 'expenses'];
       const out = { exported_at: new Date().toISOString() };
-      for (const n of names) out[n] = await fetchAll(n, '*', (q) => q.order('id'));
+      for (const [k] of DATASETS) out[k] = await fetchAll(k, '*', (q) => q.order('id'));
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }));
-      a.download = `sitio-verde-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      a.download = `sitio-verde-data-${stamp()}.json`; a.click();
     } finally { t.disabled = false; }
+  });
+  on(el, 'click', '[data-csv]', async (e, t) => {
+    const k = t.dataset.csv; t.disabled = true;
+    try { downloadCSV(`${k}-${stamp()}.csv`, rowsToCSV(await fetchAll(k, '*', (q) => q.order('id')))); } finally { t.disabled = false; }
+  });
+  on(el, 'click', '#reset', () => {
+    const scope = el.querySelector('[name=scope]:checked').value;
+    modal({ title: scope === 'factory' ? 'Full reset' : 'Clear sales & reservations', okText: 'Delete data permanently', okClass: 'btn-danger',
+      body: `<div class="alert alert-danger">${scope === 'factory' ? 'All sales, reservations, customers, menu, inventory and suppliers will be deleted and replaced with sample defaults.' : 'All sales, reservations, expenses, logs and stock history will be deleted.'}</div>
+        <label class="form-label">Type <strong>RESET</strong> to confirm</label><input name="word" class="form-control" autocomplete="off" required>`,
+      onOk: async (f) => {
+        if (f.word !== 'RESET') throw new Error('Type RESET (in capitals) to confirm.');
+        // uploaded proof files live in Storage, so remove them too
+        const [a, b] = await Promise.all([fetchAll('sale_attachments', 'file_path', (q) => q), fetchAll('reservation_attachments', 'file_path', (q) => q)]);
+        const paths = [...a, ...b].map((x) => x.file_path);
+        for (let i = 0; i < paths.length; i += 100) await sb.storage.from('proofs').remove(paths.slice(i, i + 100));
+        await rpc('reset_data', { p_scope: scope, p_confirm: f.word });
+        toast('Data reset complete.'); location.hash = '#/dashboard'; location.reload();
+      } });
   });
 }

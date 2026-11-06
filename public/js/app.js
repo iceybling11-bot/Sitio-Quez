@@ -9,9 +9,6 @@ const routes = [
   ['history', 'sales', 'history'],
   ['sale/:id', 'sales', 'detail'],
   ['approvals', 'sales', 'approvals', true],
-  ['tables', 'tables', 'layout'],
-  ['session/:id', 'tables', 'session'],
-  ['kitchen', 'kitchen', 'default'],
   ['reservations', 'reservations', 'list'],
   ['reservations/new', 'reservations', 'create'],
   ['reservations/calendar', 'reservations', 'calendar'],
@@ -25,9 +22,6 @@ const routes = [
   ['inventory/:id/history', 'inventory', 'history', true],
   ['expenses', 'finance', 'expenses', true],
   ['reports', 'finance', 'reports', true],
-  ['shift', 'shifts', 'mine'],
-  ['shifts', 'shifts', 'all', true],
-  ['shift/:id', 'shifts', 'detail'],
   ['products', 'admin', 'products', true],
   ['users', 'admin', 'users', true],
   ['settings', 'admin', 'settings', true],
@@ -50,12 +44,11 @@ function match(path) {
 }
 
 const nav = [
-  ['dashboard', 'speedometer2', 'Dashboard'], ['pos', 'cash-register', 'POS'], ['tables', 'grid-3x3-gap', 'Tables'],
-  ['kitchen', 'egg-fried', 'Kitchen'], ['reservations', 'calendar-check', 'Reservations'], ['customers', 'people', 'Customers'],
+  ['dashboard', 'speedometer2', 'Dashboard'], ['pos', 'cash-register', 'POS'], ['reservations', 'calendar-check', 'Reservations'], ['customers', 'people', 'Customers'],
   ['inventory', 'box-seam', 'Inventory', 1], ['products', 'egg-fried', 'Menu / Products', 1], ['reports', 'bar-chart', 'Reports', 1],
   ['expenses', 'wallet2', 'Expenses', 1], ['users', 'person-badge', 'Staff', 1], ['settings', 'gear', 'Settings', 1],
-  ['backup', 'cloud-arrow-down', 'Backup', 1], ['approvals', 'shield-check', 'Approvals', 1], ['shifts', 'cash-stack', 'All Shifts', 1],
-  ['history', 'receipt', 'Sales History'], ['shift', 'cash-stack', 'My Shift'],
+  ['backup', 'cloud-arrow-down', 'Data & Reset', 1], ['approvals', 'shield-check', 'Approvals', 1],
+  ['history', 'receipt', 'Sales History'],
 ].filter((n) => !n[3] || isAdmin());
 
 async function unreadCount() {

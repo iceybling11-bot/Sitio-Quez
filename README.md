@@ -23,11 +23,25 @@ deduction/void restock, tabs/merge/transfer, reservation lifecycle, shifts, refu
 Local test: put your URL/anon key in `public/js/config.js` and serve `public/` (e.g. `npx serve public`).
 The staff-account function needs `netlify dev`.
 
+## Payment QR codes
+`public/img/qr-gcash.jpg` and `public/img/qr-psbank.jpg` are shown in the POS when a payment line is set to **GCash** or **Bank Transfer**.
+To use a different QR for a branch, replace those two files (same names) before deploying that branch.
+GCash and Bank Transfer payments require a reference number and a proof-of-payment upload.
+
+## Data & Reset (admin → Data & Reset)
+Download everything as one JSON file, or any table as CSV. Reset has two levels (both require typing RESET, and both also delete uploaded proof files):
+- **Clear sales & reservations** — keeps menu, prices, customers, stock quantities, staff and settings.
+- **Full reset** — also wipes customers, menu, inventory and suppliers back to the sample defaults.
+Staff accounts and settings are never deleted.
+
+## Updating an existing database
+`schema.sql` is safe to re-run on a project that already has the earlier version: open SQL Editor and run the whole file again.
+
 ## What changed vs. the Flask version
 - Login is by **email + password** (Supabase Auth) instead of username. Lockout/brute-force protection is Supabase's built-in rate limiting.
 - Receipts print from the browser (80 mm layout, *Print → Save as PDF*). Reports export **CSV** and print to PDF; the Excel/PDF server exports were dropped.
 - Proof-of-payment files go to a **private** Supabase Storage bucket (`proofs`), opened via 5-minute signed links.
-- Kitchen items created by reservation billing no longer clutter the kitchen queue.
+- Tables, Kitchen and Shift screens were removed; the app is now POS, reservations, customers, sales history and admin tools.
 - Backup button exports JSON; use Supabase's own backups for real disaster recovery.
 
 ## Repairs made while converting

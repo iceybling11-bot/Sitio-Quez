@@ -1,13 +1,9 @@
-import { sb, state, esc, peso, num, run, rpc, on, guard, toast, uploadProof, hashParams, isAdmin } from '../core.js';
+import { sb, state, esc, peso, num, run, rpc, on, guard, toast, uploadProof, isAdmin } from '../core.js';
 import { printReceipt } from './sales.js';
 
 export default async function (el) {
-  const [products, tables] = await Promise.all([
-    run(sb.from('products').select('*, buffet_tiers(*)').eq('is_buffet', true).eq('available', true).order('id')),
-    run(sb.from('restaurant_tables').select('id,name,status,session_id').order('name')),
-  ]);
+  const products = await run(sb.from('products').select('*, buffet_tiers(*)').eq('is_buffet', true).eq('available', true).order('id'));
   if (!products.length) { el.innerHTML = '<div class="alert alert-warning">No buffet package is set up yet. An admin can add one under Menu / Products.</div>'; return; }
-  const pre = hashParams().get('table');
   const tier = (p, t) => num(p.buffet_tiers.find((x) => x.tier === t)?.price);
 
   el.innerHTML = `<h4 class="mb-3">Point of Sale</h4><div class="row g-3">
@@ -17,9 +13,7 @@ export default async function (el) {
     <div class="row g-2" id="guests"></div>
     <hr>
     <div class="row g-2">
-      <div class="col-md-6"><label class="form-label">Customer name</label><input id="cname" class="form-control" placeholder="Walk-in"></div>
-      <div class="col-md-6"><label class="form-label">Table (optional)</label><select id="tbl" class="form-select"><option value="">— none —</option>
-        ${tables.map((t) => `<option value="${t.id}" ${String(t.id) === pre ? 'selected' : ''}>${esc(t.name)} (${esc(t.status)}${t.session_id ? ', open tab' : ''})</option>`).join('')}</select></div>
+      <div class="col-12"><label class="form-label">Customer name</label><input id="cname" class="form-control" placeholder="Walk-in"></div>
       <div class="col-12"><div class="form-check"><input class="form-check-input" type="checkbox" id="walkin" checked><label class="form-check-label" for="walkin">Walk-in (issue queue number)</label></div></div>
     </div></div></div></div>
   <div class="col-lg-5"><div class="card"><div class="card-body">
@@ -34,7 +28,8 @@ export default async function (el) {
     <div id="pays"></div>
     <div class="d-flex justify-content-between mt-2"><span>Tendered</span><span id="tend">₱0.00</span></div>
     <div class="d-flex justify-content-between"><span>Change</span><span id="chg">₱0.00</span></div>
-    <div id="proofwrap" class="mt-2 d-none"><label class="form-label">Proof of payment (required for GCash)</label><input type="file" id="proof" accept="image/*,.pdf" class="form-control form-control-sm"></div>
+    <div id="qrwrap" class="mt-3 d-none"><div class="small fw-semibold text-center mb-1">Scan to pay (customer)</div><div id="qrs" class="d-flex gap-2 justify-content-center flex-wrap"></div></div>
+    <div id="proofwrap" class="mt-2 d-none"><label class="form-label">Proof of payment (required for GCash / Bank Transfer)</label><input type="file" id="proof" accept="image/*,.pdf" class="form-control form-control-sm"></div>
     <button id="go" class="btn btn-sv w-100 mt-3 btn-lg">Complete sale</button>
   </div></div></div></div>`;
 
@@ -45,7 +40,7 @@ export default async function (el) {
   const pays = el.querySelector('#pays');
   const addPay = (m = 'Cash') => {
     const r = document.createElement('div'); r.className = 'row g-1 mb-1 pay';
-    r.innerHTML = `<div class="col-4"><select class="form-select form-select-sm" data-f="method">${['Cash', 'GCash', 'Credit Card'].map((x) => `<option ${x === m ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+    r.innerHTML = `<div class="col-4"><select class="form-select form-select-sm" data-f="method">${['Cash', 'GCash', 'Bank Transfer', 'Credit Card'].map((x) => `<option ${x === m ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
       <div class="col-4"><input type="number" min="0" step="0.01" class="form-control form-control-sm" data-f="amount" placeholder="Amount"></div>
       <div class="col-3"><input class="form-control form-control-sm" data-f="reference_number" placeholder="Ref #"></div>
       <div class="col-1"><button type="button" class="btn btn-sm text-danger p-0" data-rm>✕</button></div>`;
@@ -73,8 +68,13 @@ export default async function (el) {
     el.querySelector('#sav').textContent = sav ? `Senior/PWD savings vs adult price: ${peso(sav)}` : '';
     const limit = num(state.settings.max_staff_discount_percent || 10);
     el.querySelector('#apprnote').textContent = !isAdmin() && (disc > 1000 || pct > limit) ? 'This discount needs admin approval before the sale posts.' : '';
-    const hasG = payments().some((x) => x.method === 'GCash');
-    el.querySelector('#proofwrap').classList.toggle('d-none', !hasG);
+    const ms = payments().map((x) => x.method);
+    const needsProof = ms.includes('GCash') || ms.includes('Bank Transfer');
+    el.querySelector('#proofwrap').classList.toggle('d-none', !needsProof);
+    const qrs = [ms.includes('GCash') && ['img/qr-gcash.jpg', 'GCash'], ms.includes('Bank Transfer') && ['img/qr-psbank.jpg', 'PSBank / InstaPay']].filter(Boolean);
+    el.querySelector('#qrwrap').classList.toggle('d-none', !qrs.length);
+    const html = qrs.map(([src, label]) => `<figure class="m-0 text-center"><img src="${src}" alt="${label} QR" style="max-height:340px;max-width:100%" class="border rounded"><figcaption class="small text-muted">${label}</figcaption></figure>`).join('');
+    const box = el.querySelector('#qrs'); if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
     return { total };
   };
   el.addEventListener('input', calc); el.addEventListener('change', calc);
@@ -88,12 +88,12 @@ export default async function (el) {
     try {
       const pl = payments().filter((x) => x.amount !== '' || x.method !== 'Cash');
       const file = el.querySelector('#proof').files[0];
-      if (pl.some((x) => x.method === 'GCash') && file) proofPath = await uploadProof(file, 'sales');
+      if (pl.some((x) => x.method === 'GCash' || x.method === 'Bank Transfer') && file) proofPath = await uploadProof(file, 'sales');
       const g = read();
       const res = await rpc('checkout', { p: {
         product_id: cur().id, ...g, promo_discount_percent: num(el.querySelector('#promo').value),
         payments: pl.filter((x) => x.amount !== ''), is_walkin: el.querySelector('#walkin').checked,
-        table_id: el.querySelector('#tbl').value || null, customer_name: el.querySelector('#cname').value.trim(), has_proof: !!proofPath } });
+        customer_name: el.querySelector('#cname').value.trim(), has_proof: !!proofPath } });
       if (proofPath) await sb.from('sale_attachments').insert({ sale_id: res.sale_id, file_path: proofPath });
       if (res.requires_approval) toast(`Sale ${res.sale_number} is waiting for admin approval.`, 'warning');
       else toast(`Sale ${res.sale_number} completed — ${peso(res.total)}`);
