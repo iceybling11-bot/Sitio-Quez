@@ -1,4 +1,5 @@
-import { sb, state, esc, peso, dt, num, run, rpc, on, modal, confirmBox, badge, pager, isAdmin, toast, signedUrl, PAGE_SIZE, hashParams } from '../core.js';
+import { sb, state, esc, peso, dt, num, run, rpc, on, modal, confirmBox, badge, pager, isAdmin, toast, signedUrl, hashParams, downloadCSV } from '../core.js';
+import { fetchAll } from './finance.js';
 
 const SALE_SELECT = '*, sale_items(*), sale_payments(*), sale_refunds(*), sale_attachments(*), cashier:profiles!cashier_id(name,username), reservation:reservations!reservation_id(reservation_number)';
 
@@ -37,10 +38,21 @@ export async function history(el) {
   if (error) throw new Error(error.message);
   el.innerHTML = `<div class="d-flex justify-content-between mb-3"><h4>Sales History</h4>
     <form class="d-flex gap-2" onsubmit="location.hash='#/history?q='+encodeURIComponent(this.q.value);return false"><input name="q" value="${esc(q)}" class="form-control" placeholder="Search sale # or customer"><button class="btn btn-sv">Search</button></form></div>
+    ${isAdmin() ? `<div class="mb-3 d-flex gap-2 flex-wrap"><button class="btn btn-outline-success btn-sm" id="dl"><i class="bi bi-download"></i> Download ${q ? 'matching sales' : 'all sales'} (CSV)</button><a class="btn btn-outline-secondary btn-sm" href="#/backup">More downloads &amp; reset</a></div>` : ''}
     <div class="card"><div class="table-responsive"><table class="table table-hover mb-0"><thead><tr><th>Sale #</th><th>Customer</th><th>Total</th><th>Status</th><th>Date</th></tr></thead><tbody>
     ${data.map((s) => `<tr class="clickable" onclick="location.hash='#/sale/${s.id}'"><td>${esc(s.sale_number)}</td><td>${esc(s.customer_name)}</td><td>${peso(s.total)}</td>
       <td>${badge(s.status)}${s.requires_approval && s.status === 'open' ? ' <small class="text-warning">needs approval</small>' : ''}</td><td>${dt(s.created_at)}</td></tr>`).join('') || '<tr><td colspan=5 class="text-muted p-3">No sales found.</td></tr>'}
     </tbody></table></div></div>${pager(count || 0, page, 50, `#/history?q=${encodeURIComponent(q)}&page=`)}`;
+  on(el, 'click', '#dl', async (e, t) => {
+    t.disabled = true;
+    try {
+      const rows = await fetchAll('sales', 'sale_number,created_at,customer_name,queue_number,subtotal,discount,discount_type,senior_pwd_savings,total,amount_tendered,change,status,void_reason,sale_payments(method,amount,reference_number)',
+        (b) => { let x = b.order('created_at', { ascending: false }); if (q) x = x.or(`sale_number.ilike.%${q}%,customer_name.ilike.%${q}%`); return x; });
+      downloadCSV(`sales-${new Date().toISOString().slice(0, 10)}.csv`, [['Sale #', 'Date', 'Customer', 'Queue', 'Subtotal', 'Discount', 'Discount type', 'Senior/PWD savings', 'Total', 'Tendered', 'Change', 'Status', 'Void reason', 'Payments'],
+        ...rows.map((r) => [r.sale_number, r.created_at, r.customer_name, r.queue_number, r.subtotal, r.discount, r.discount_type, r.senior_pwd_savings, r.total, r.amount_tendered, r.change, r.status, r.void_reason,
+          r.sale_payments.map((p) => `${p.method} ${p.amount}${p.reference_number ? ' (' + p.reference_number + ')' : ''}`).join('; ')])]);
+    } finally { t.disabled = false; }
+  });
 }
 
 export async function detail(el, { id }) {
@@ -50,6 +62,7 @@ export async function detail(el, { id }) {
   el.innerHTML = `<div class="d-flex justify-content-between align-items-center mb-3"><h4>Sale ${esc(s.sale_number)} ${badge(s.status)}</h4>
     <div class="d-flex gap-2"><button class="btn btn-outline-secondary" id="pr"><i class="bi bi-printer"></i> Receipt</button>
     ${isAdmin() && s.status !== 'voided' ? '<button class="btn btn-outline-warning" id="rf">Refund</button><button class="btn btn-outline-danger" id="vd">Void</button>' : ''}
+    ${isAdmin() ? '<button class="btn btn-danger" id="del"><i class="bi bi-trash"></i> Delete</button>' : ''}
     ${isAdmin() && s.status === 'open' && s.requires_approval ? '<button class="btn btn-success" id="ap">Approve</button>' : ''}</div></div>
   <div class="row g-3"><div class="col-lg-7"><div class="card mb-3"><div class="card-header">Items</div><table class="table mb-0"><tbody>
     ${s.sale_items.map((i) => `<tr><td>${esc(i.product_name)}${i.is_buffet ? `<br><small class="text-muted">Adult ${i.buffet_adult} · Senior ${i.buffet_senior} · PWD ${i.buffet_pwd} · Kids ${i.buffet_kids} · Free ${i.buffet_free}</small>` : ''}</td><td>x${i.quantity}</td><td class="text-end">${peso(i.line_total)}</td></tr>`).join('')}
@@ -70,6 +83,16 @@ export async function detail(el, { id }) {
   el.querySelector('#pr').onclick = () => printReceipt(s.id).catch((e) => toast(e.message, 'danger'));
   on(el, 'click', '[data-proof]', async (e, t) => { e.preventDefault(); window.open(await signedUrl(t.dataset.proof), '_blank', 'noopener'); });
   el.querySelector('#ap')?.addEventListener('click', () => confirmBox(`Approve sale ${s.sale_number}?`, async () => { await rpc('approve_sale', { p_sale: s.id }); toast('Sale approved.'); detail(el, { id }); }, 'Approve'));
+  el.querySelector('#del')?.addEventListener('click', () => modal({ title: `Permanently delete ${s.sale_number}`, okText: 'Delete permanently', okClass: 'btn-danger',
+    body: `<div class="alert alert-danger">This erases the sale, its payments, refunds and proof images, and returns any stock it used. It cannot be undone. To keep a record, use <strong>Void</strong> instead.</div>
+      <label class="form-label">Type <strong>DELETE</strong> to confirm</label><input name="word" class="form-control" autocomplete="off" required>`,
+    onOk: async (f) => {
+      if (f.word !== 'DELETE') throw new Error('Type DELETE (in capitals) to confirm.');
+      const paths = s.sale_attachments.map((a) => a.file_path);
+      await rpc('delete_sale', { p_sale: s.id, p_confirm: f.word });
+      if (paths.length) await sb.storage.from('proofs').remove(paths);
+      toast('Sale deleted.'); location.hash = '#/history';
+    } }));
   el.querySelector('#vd')?.addEventListener('click', () => modal({ title: `Void ${s.sale_number}`, okText: 'Void sale', okClass: 'btn-danger',
     body: '<label class="form-label">Reason</label><input name="reason" class="form-control" required><p class="small text-muted mt-2">Stock is returned to inventory and the money collected is recorded as refunded.</p>',
     onOk: async (f) => { await rpc('void_sale', { p_sale: s.id, p_reason: f.reason }); toast('Sale voided.'); detail(el, { id }); } }));

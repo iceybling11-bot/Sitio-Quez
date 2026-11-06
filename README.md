@@ -34,6 +34,10 @@ Download everything as one JSON file, or any table as CSV. Reset has two levels 
 - **Full reset** — also wipes customers, menu, inventory and suppliers back to the sample defaults.
 Staff accounts and settings are never deleted.
 
+## Deleting and downloading in the POS
+- **Sales History → Download (CSV)** exports the sales (with their payments); **Data & Reset** has every table plus a full JSON file.
+- **Open any sale → Delete** (admin) permanently removes that one sale and returns its stock. Use **Void** if you want to keep a record.
+
 ## Updating an existing database
 `schema.sql` is safe to re-run on a project that already has the earlier version: open SQL Editor and run the whole file again.
 

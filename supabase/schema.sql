@@ -857,6 +857,28 @@ insert into recipes(product_id, inventory_item_id, quantity_per_unit)
 end $fn$;
 select seed_defaults();
 
+-- Permanently delete ONE sale (admin only). Returns any stock it used, then removes the sale,
+-- its items, payments, refunds and attachment records. Use "Void" instead if you want to keep a record.
+create or replace function delete_sale(p_sale bigint, p_confirm text) returns void
+language plpgsql security definer set search_path = public as $fn$
+declare s sales%rowtype; t record; v_reversed boolean;
+begin
+  if not is_admin() then raise exception 'Admins only'; end if;
+  if p_confirm is distinct from 'DELETE' then raise exception 'Type DELETE to confirm.'; end if;
+  select * into s from sales where id = p_sale for update;
+  if not found then raise exception 'Sale not found'; end if;
+  -- restock only if the sale still holds stock (not already reversed by a void)
+  v_reversed := exists (select 1 from inventory_transactions where reference = p_sale::text and type = 'void_reversal');
+  if not v_reversed then
+    for t in select * from inventory_transactions where reference = p_sale::text and type = 'sale_deduction' loop
+      update inventory_items set quantity = quantity + t.quantity where id = t.item_id;
+    end loop;
+  end if;
+  delete from inventory_transactions where reference = p_sale::text;
+  delete from sales where id = p_sale;
+  perform log_activity(format('DELETED sale %s (PHP %s, status %s)', s.sale_number, s.total, s.status));
+end $fn$;
+
 -- ---------- Data reset (admin only) ----------
 -- scope 'sales'   : wipes sales, reservations, expenses, logs, notifications and stock history.
 --                   Keeps staff, settings, menu/prices, customers and current stock levels.
