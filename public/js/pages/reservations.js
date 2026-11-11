@@ -40,24 +40,52 @@ export async function calendar(el) {
 }
 
 export async function create(el) {
-  el.innerHTML = `<h4 class="mb-3">New reservation</h4><form id="f" class="card card-body"><div class="row g-3">
-    <div class="col-md-6"><label class="form-label">Customer name *</label><input name="customer_name" class="form-control" required></div>
-    <div class="col-md-3"><label class="form-label">Phone</label><input name="phone" class="form-control"></div><div class="col-md-3"><label class="form-label">Email</label><input name="email" type="email" class="form-control"></div>
-    <div class="col-md-3"><label class="form-label">Date *</label><input name="date" type="date" min="${today()}" class="form-control" required></div>
-    <div class="col-md-3"><label class="form-label">Time *</label><input name="time" type="time" class="form-control" required></div>
-    <div class="col-md-3"><label class="form-label">Guests *</label><input name="pax" type="number" min="1" value="10" class="form-control" required></div>
+  // Assigned staff: pick from active staff accounts (stored as the person's name, same text column as before).
+  let staff = [];
+  try { staff = (await run(sb.from('profiles').select('name,username').eq('active', true).order('name'))).map((x) => x.name || x.username).filter(Boolean); } catch { /* falls back to a text box */ }
+  const req = '<span class="text-danger" title="Required">*</span>';
+  const staffField = staff.length
+    ? `<select name="assigned_staff" class="form-select" required><option value="" disabled selected>Select staff…</option>${opt(staff)}</select>`
+    : '<input name="assigned_staff" class="form-control" required>';
+  el.innerHTML = `<h4 class="mb-1">New reservation</h4><p class="text-muted small mb-3">Fields marked ${req} are required.</p><form id="f" class="card card-body" novalidate><div class="row g-3">
+    <div class="col-md-6"><label class="form-label">Customer name ${req}</label><input name="customer_name" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">Phone number ${req}</label><input name="phone" type="tel" class="form-control" required></div><div class="col-md-3"><label class="form-label">Email</label><input name="email" type="email" class="form-control"></div>
+    <div class="col-md-3"><label class="form-label">Date ${req}</label><input name="date" type="date" min="${today()}" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">Time ${req}</label><input name="time" type="time" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">Guests (pax) ${req}</label><input name="pax" type="number" min="1" step="1" class="form-control" required></div>
     <div class="col-md-3"><label class="form-label">Event</label><input name="event_type" class="form-control" placeholder="Birthday, wedding…"></div>
-    <div class="col-md-3"><label class="form-label">Down payment</label><input name="down_payment" type="number" min="0" step="0.01" value="0" class="form-control"></div>
-    <div class="col-md-3"><label class="form-label">Method</label><select name="payment_method" class="form-select">${opt(METHODS)}</select></div>
+    <div class="col-md-3"><label class="form-label">Down payment ${req}</label><input name="down_payment" type="number" min="0.01" step="0.01" class="form-control" required></div>
+    <div class="col-md-3"><label class="form-label">Payment method ${req}</label><select name="payment_method" class="form-select" required><option value="" disabled selected>Select method…</option>${opt(METHODS)}</select></div>
     <div class="col-md-3"><label class="form-label">Reference #</label><input name="reference_number" class="form-control"></div>
     <div class="col-md-3"><label class="form-label">Proof of payment</label><input id="proof" type="file" accept="image/*,.pdf" class="form-control"></div>
-    <div class="col-md-6"><label class="form-label">Inquiry #</label><input name="inquiry_number" class="form-control"></div><div class="col-md-6"><label class="form-label">Assigned staff</label><input name="assigned_staff" class="form-control"></div>
+    <div class="col-md-6"><label class="form-label">Inquiry #</label><input name="inquiry_number" class="form-control"></div><div class="col-md-6"><label class="form-label">Assigned staff ${req}</label>${staffField}</div>
     <div class="col-12"><label class="form-label">Special requests</label><textarea name="special_requests" class="form-control" rows="2"></textarea></div></div>
     <button class="btn btn-sv mt-3 align-self-start">Create reservation</button></form>`;
-  el.querySelector('#f').onsubmit = async (e) => {
-    e.preventDefault(); const btn = e.submitter; btn.disabled = true;
+  const form = el.querySelector('#f');
+  const LABELS = { customer_name: 'Customer name', phone: 'Phone number', date: 'Reservation date', time: 'Reservation time', pax: 'Number of guests', down_payment: 'Down payment', payment_method: 'Payment method', assigned_staff: 'Assigned staff' };
+  // Returns the first problem found (and highlights every offending field), or null when the form is good.
+  const validate = (f) => {
+    const bad = {};
+    ['customer_name', 'phone', 'date', 'time', 'assigned_staff', 'payment_method'].forEach((k) => { if (!String(f[k] ?? '').trim()) bad[k] = `${LABELS[k]} is required.`; });
+    if (!bad.phone && String(f.phone).replace(/\D/g, '').length < 7) bad.phone = 'Enter a valid phone number.';
+    if (!bad.date && f.date < today()) bad.date = 'Reservation date cannot be in the past.';
+    if (!(Number.isInteger(+f.pax) && +f.pax >= 1)) bad.pax = f.pax === '' ? `${LABELS.pax} is required.` : 'Number of guests must be a whole number of at least 1.';
+    if (String(f.down_payment).trim() === '') bad.down_payment = `${LABELS.down_payment} is required.`;
+    else if (!(num(f.down_payment) > 0)) bad.down_payment = 'Down payment must be greater than zero.';
+    form.querySelectorAll('.form-control,.form-select').forEach((i) => i.classList.toggle('is-invalid', !!bad[i.name]));
+    const first = Object.keys(bad)[0];
+    if (first) form.querySelector(`[name=${first}]`)?.focus();
+    return first ? bad[first] : null;
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault(); const btn = e.submitter || form.querySelector('button'); if (btn.disabled) return;
+    const f = Object.fromEntries(new FormData(form));
+    const problem = validate(f);
+    if (problem) { toast(problem, 'danger'); return; }
+    btn.disabled = true;
     try {
-      const f = Object.fromEntries(new FormData(e.target)); f.pax = +f.pax; f.down_payment = num(f.down_payment);
+      ['customer_name', 'phone', 'assigned_staff'].forEach((k) => (f[k] = f[k].trim()));
+      f.pax = +f.pax; f.down_payment = num(f.down_payment);
       const id = await rpc('create_reservation', { p: f });
       const file = el.querySelector('#proof').files[0];
       if (file) { const path = await uploadProof(file, 'reservations'); await run(sb.from('reservation_attachments').insert({ reservation_id: id, file_path: path })); }
@@ -78,7 +106,7 @@ export async function detail(el, { id }) {
   ${r.billing_requires_approval ? '<div class="alert alert-warning">Final bill is waiting for admin approval (see Approvals).</div>' : ''}
   <div class="row g-3"><div class="col-lg-6"><div class="card"><div class="card-body">
     <div><strong>${esc(r.customer_name)}</strong> · ${esc(r.phone || '')} ${esc(r.email || '')}</div><div>${dOnly(r.date)} at ${tm(r.time)} · ${r.pax} guests${r.actual_pax ? ` (actual ${r.actual_pax})` : ''}</div>
-    <div>Event: ${esc(r.event_type || '—')}</div><div>Assigned: ${esc(r.assigned_staff || '—')}</div><div>Inquiry #: ${esc(r.inquiry_number || '—')}</div>
+    <div>Event: ${esc(r.event_type || '—')}</div><div>Assigned staff: ${esc(r.assigned_staff || '—')}</div><div>Inquiry #: ${esc(r.inquiry_number || '—')}</div>
     ${r.confirmed_by ? `<div>Confirmed by ${esc(r.confirmed_by)} on ${dt(r.date_confirmed)}</div>` : ''}${r.arrival_time ? `<div>Arrived ${dt(r.arrival_time)}</div>` : ''}
     <div class="mt-2"><em>${esc(r.special_requests || '')}</em></div>
     ${r.status === 'Completed' ? `<hr><div>Total bill: <strong>${peso(r.total_bill)}</strong></div><div>Remaining balance: ${peso(r.remaining_balance)}</div>` : ''}</div></div></div>

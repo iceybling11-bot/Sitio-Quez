@@ -30,5 +30,13 @@ body { background: #f4f7f5; font-family: 'Segoe UI', system-ui, sans-serif; }
 .receipt { width: 300px; font: 12px/1.4 monospace; color:#000; background:#fff; padding:10px; margin:auto; }
 .receipt hr { border-top:1px dashed #000; opacity:1; margin:6px 0; }
 .receipt .row2 { display:flex; justify-content:space-between; }
-@media print { body * { visibility: hidden; } #print-area, #print-area * { visibility: visible; } #print-area { position:absolute; left:0; top:0; } }
+.receipt .row2 span:last-child { white-space: nowrap; margin-left: 6px; }
+@page { margin: 3mm; }
+@media print {
+  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; height: auto !important; }
+  body > *:not(#print-area) { display: none !important; }
+  #print-area { display: block !important; position: static !important; visibility: visible !important; }
+  #print-area * { visibility: visible !important; }
+  #print-area .receipt { width: 72mm; margin: 0; padding: 0; }
+}
 .clickable { cursor:pointer; }

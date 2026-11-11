@@ -3,31 +3,59 @@ import { fetchAll } from './finance.js';
 
 const SALE_SELECT = '*, sale_items(*), sale_payments(*), sale_refunds(*), sale_attachments(*), cashier:profiles!cashier_id(name,username), reservation:reservations!reservation_id(reservation_number)';
 
+const money = (n) => num(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const TIERS = [['adult', 'Adult', 'buffet_adult'], ['senior', 'Senior', 'buffet_senior'], ['pwd', 'PWD', 'buffet_pwd'], ['kids', 'Kids', 'buffet_kids'], ['free', 'Free', 'buffet_free']];
+const settle = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export async function printReceipt(saleId) {
   const s = await run(sb.from('sales').select(SALE_SELECT).eq('id', saleId).single());
   const paid = s.sale_payments.reduce((a, p) => a + num(p.amount), 0), refunded = s.sale_refunds.reduce((a, r) => a + num(r.amount), 0);
   const row = (l, r) => `<div class="row2"><span>${l}</span><span>${r}</span></div>`;
+
+  // The sale stores guest counts and the line total, not each category's unit price, so read the package's current
+  // tier prices and use them only if they add up to what was actually charged (otherwise fall back to counts only).
+  const tierPrices = {};
+  for (const pid of new Set(s.sale_items.filter((i) => i.is_buffet && i.product_id).map((i) => i.product_id))) {
+    try { tierPrices[pid] = Object.fromEntries((await run(sb.from('buffet_tiers').select('tier,price').eq('product_id', pid))).map((t) => [t.tier, num(t.price)])); } catch { /* counts only */ }
+  }
   const items = s.sale_items.map((i) => {
-    const bd = [['Adult', i.buffet_adult], ['Senior', i.buffet_senior], ['PWD', i.buffet_pwd], ['Kids', i.buffet_kids], ['Free', i.buffet_free]].filter((x) => x[1]).map((x) => `${x[0]} x${x[1]}`).join(', ');
-    return row(`${esc(i.product_name)}${i.is_buffet ? ' (Buffet)' : ''} x${i.quantity}`, num(i.line_total).toFixed(2)) + (bd ? `<div><em>${bd}</em></div>` : '');
+    const head = row(`${esc(i.product_name)}${i.is_buffet ? ' (Buffet)' : ''}`, i.is_buffet ? '' : `x${i.quantity} ${money(i.line_total)}`);
+    if (!i.is_buffet) return head;
+    const tp = tierPrices[i.product_id];
+    const cats = TIERS.filter(([, , col]) => num(i[col]) > 0);
+    const priced = tp && Math.abs(cats.reduce((a, [k, , col]) => a + (k === 'free' ? 0 : tp[k] * num(i[col])), 0) - num(i.line_total)) < 0.015;
+    const lines = priced
+      ? cats.map(([k, label, col]) => { const u = k === 'free' ? 0 : tp[k]; return row(`${label} ${i[col]} x ${money(u)}`, money(u * num(i[col]))); }).join('')
+      : cats.map(([, label, col]) => `<div>${label} x${i[col]}</div>`).join('') + row('Package total', money(i.line_total));
+    return head + lines;
   }).join('');
+
+  const remaining = Math.max(0, num(s.total) - paid);
+  const change = Math.max(0, num(s.change) || paid - num(s.total));
   const area = document.getElementById('print-area');
   area.innerHTML = `<div class="receipt"><div style="text-align:center"><strong>${esc(state.settings.restaurant_name || 'Sitio Verde')}</strong><br>SALES RECEIPT (Customer Copy)</div><hr>
     ${row('Receipt #', esc(s.sale_number))}${s.reservation ? row('Reservation #', esc(s.reservation.reservation_number)) : ''}${row('Date', dt(s.created_at))}
     ${row('Cashier', esc(s.cashier?.name || s.cashier?.username || 'N/A'))}${row('Customer', esc(s.customer_name || 'Walk-in'))}
     ${s.queue_number ? row('Queue #', esc(s.queue_number)) : ''}<hr>
-    ${items}<hr>${row('Subtotal', 'PHP ' + num(s.subtotal).toFixed(2))}
-    ${num(s.discount) ? row(`Discount (${esc(s.discount_type)})`, '-PHP ' + num(s.discount).toFixed(2)) : ''}
-    ${num(s.senior_pwd_savings) ? row('Senior/PWD savings', 'PHP ' + num(s.senior_pwd_savings).toFixed(2)) : ''}
-    <div class="row2"><strong>TOTAL</strong><strong>PHP ${num(s.total).toFixed(2)}</strong></div>
-    ${s.sale_payments.map((p) => row(esc(p.method) + (p.reference_number ? ` (${esc(p.reference_number)})` : ''), 'PHP ' + num(p.amount).toFixed(2))).join('')}
-    ${refunded ? row('Refunded', '-PHP ' + refunded.toFixed(2)) + row('Net paid', 'PHP ' + (paid - refunded).toFixed(2)) : ''}
-    ${num(s.amount_tendered) ? row('Tendered', 'PHP ' + num(s.amount_tendered).toFixed(2)) + row('Change', 'PHP ' + num(s.change).toFixed(2)) : ''}
+    ${items}<hr>${row('Subtotal', 'PHP ' + money(s.subtotal))}
+    ${num(s.discount) ? row(`Discount (${esc(s.discount_type)})`, '-PHP ' + money(s.discount)) : ''}
+    ${num(s.senior_pwd_savings) ? row('Senior/PWD savings', 'PHP ' + money(s.senior_pwd_savings)) : ''}
+    <div class="row2"><strong>TOTAL</strong><strong>PHP ${money(s.total)}</strong></div><hr>
+    ${s.sale_payments.map((p) => row(esc(p.method) + (p.reference_number ? ` (${esc(p.reference_number)})` : ''), 'PHP ' + money(p.amount))).join('')}
+    ${row('Total paid', 'PHP ' + money(paid))}
+    ${remaining > 0.005 ? row('Remaining balance', 'PHP ' + money(remaining)) : ''}
+    ${change > 0.005 ? row('Change', 'PHP ' + money(change)) : ''}
+    ${refunded ? row('Refunded', '-PHP ' + money(refunded)) + row('Net paid', 'PHP ' + money(paid - refunded)) : ''}
     ${s.status === 'voided' ? '<hr><div style="text-align:center"><strong>*** VOIDED ***</strong></div>' : ''}
     <hr><div style="text-align:center"><em>${esc(state.settings.receipt_footer || 'Thank you for dining with us!')}</em></div></div>`;
-  area.classList.remove('d-none');
+  if (!area.textContent.trim()) throw new Error('Receipt is empty - nothing to print.');
+
+  // Print CSS (style.css) shows #print-area only while printing and hides the rest of the page, so the receipt
+  // stays in the DOM. Don't hide or clear it after print(): Android renders its preview after print() returns,
+  // and removing the receipt at that point is what produced the blank preview.
+  try { await Promise.race([document.fonts?.ready, settle(300)]); } catch { /* ignore */ }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));   // let layout finish first
   window.print();
-  setTimeout(() => area.classList.add('d-none'), 500);
 }
 
 export async function history(el) {

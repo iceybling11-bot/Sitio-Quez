@@ -59,3 +59,10 @@ Staff accounts and settings are never deleted.
 ## Tested / not tested
 - `schema.sql` was run against a real Postgres 16 (Supabase auth/storage stubbed): checkout, stock rejection, approval, void/restock, refunds, tabs, reservations + final billing, shifts, dashboard/report functions.
 - Front-end JS passes syntax and undefined-variable linting, but **I could not click through it in a browser** here. Expect to report small UI bugs on first run.
+
+## POS / reservation improvements (latest)
+- **Split payments:** the POS shows Total Bill, Total Amount Paid, Remaining Balance and Change. A "+ split" row fills itself with the remaining balance and keeps following it until the cashier types an amount. Complete sale stays disabled until the bill is covered (`checkout()` enforces the same rule server-side).
+- **Buffet breakdown:** Adult / Senior / PWD / Kids / Free each show price x qty = subtotal, above the totals. Prices come from `buffet_tiers`; the math matches `checkout()`.
+- **Receipt printing:** the receipt stays in the page and is shown only by the print stylesheet. Previously it was hidden 500 ms after `print()`, which left Android/desktop previews blank. The receipt now lists the guest breakdown (unit price and subtotal), discount, total, each payment, total paid, remaining balance and change.
+- **New reservation:** customer name, phone, date, time, pax, down payment (> 0), payment method and assigned staff are required and validated. Assigned staff is a dropdown of active staff accounts.
+- No database or SQL changes were needed; `schema.sql` is unchanged.
